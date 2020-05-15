@@ -1015,7 +1015,7 @@ var client_Main = function(host,port) {
 		port = window.location.port;
 	}
 	if(port == "") {
-		port = "80";
+		port = "";
 	}
 	client_Settings.init({ version : 2, name : "", hash : "", isExtendedPlayer : false, chatSize : 40, playerSize : 60, synchThreshold : 2, isSwapped : false, isUserListHidden : false, latestLinks : [], hotkeysEnabled : true},$bind(this,this.settingsPatcher));
 	this.settings = client_Settings.read();
