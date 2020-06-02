@@ -1,4 +1,4 @@
-FROM node:lts-alpine-3.11
+FROM node:lts-alpine3.11
 
 COPY . /synctube/
 
