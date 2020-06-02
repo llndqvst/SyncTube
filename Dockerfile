@@ -1,5 +1,9 @@
-FROM node:lts-alpine3.11 as base
+FROM alpine:3.11.5 as base
 
+RUN apk update && \
+        apk add --no-cache \
+        npm
+        
 COPY . /synctube/
 
 WORKDIR /synctube
