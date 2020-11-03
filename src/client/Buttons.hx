@@ -8,27 +8,32 @@ import js.html.Element;
 import client.Main.ge;
 import js.Browser.window;
 import js.Browser.document;
-import js.html.Event;
 
 class Buttons {
 
+	static inline var CHAT_MIN_SIZE = 200;
 	static var split:Split;
 	static var settings:ClientSettings;
 
 	public static function init(main:Main):Void {
 		settings = main.settings;
-		window.onresize = onVideoResize;
+		if (settings.isSwapped) swapPlayerAndChat();
 		initSplit();
+		setSplitSize(settings.chatSize);
 		initChatInput(main);
-		initNavBar(main);
 
 		final passIcon = ge("#guestpass_icon");
 		passIcon.onclick = e -> {
-			final isOpen = passIcon.classList.toggle("glyphicon-eye-open");
-			passIcon.classList.toggle("glyphicon-eye-close");
+			final icon = passIcon.firstElementChild;
+			final isOpen = icon.getAttribute("name") == "eye-off";
 			final pass:InputElement = cast ge("#guestpass");
-			if (isOpen) pass.type = "password";
-			else pass.type = "text";
+			if (isOpen) {
+				pass.type = "password";
+				icon.setAttribute("name", "eye");
+			} else {
+				pass.type = "text";
+				icon.setAttribute("name", "eye-off");
+			}
 		}
 
 		final smilesBtn = ge("#smilesbtn");
@@ -36,7 +41,7 @@ class Buttons {
 			final smilesWrap = ge("#smileswrap");
 			if (smilesWrap.children.length == 0) return;
 			final isActive = smilesBtn.classList.toggle("active");
-			if (isActive) smilesWrap.style.display = "block";
+			if (isActive) smilesWrap.style.display = "grid";
 			else smilesWrap.style.display = "none";
 			if (smilesWrap.firstElementChild.dataset.src == null) return;
 			for (child in smilesWrap.children) {
@@ -69,30 +74,21 @@ class Buttons {
 
 		final userlistToggle = ge("#userlisttoggle");
 		userlistToggle.onclick = e -> {
-			final isHidden = userlistToggle.classList.toggle("glyphicon-chevron-right");
-			userlistToggle.classList.toggle("glyphicon-chevron-down");
+			final icon = userlistToggle.firstElementChild;
+			final isHidden = icon.getAttribute("name") == "chevron-forward";
 			final style = ge("#userlist").style;
-			if (isHidden) style.display = "none";
-			else style.display = "block";
-			settings.isUserListHidden = isHidden;
+			if (isHidden) {
+				style.display = "block";
+				icon.setAttribute("name", "chevron-down");
+			} else {
+				style.display = "none";
+				icon.setAttribute("name", "chevron-forward");
+			}
+			settings.isUserListHidden = !isHidden;
 			Settings.write(settings);
 		}
 		ge("#usercount").onclick = userlistToggle.onclick;
 		if (settings.isUserListHidden) userlistToggle.onclick();
-
-		final extendPlayer = ge("#extendplayer");
-		extendPlayer.onclick = e -> {
-			final isExtended = extendPlayer.classList.toggle("active");
-			final sizes = isExtended ? [20, 80] : [40, 60];
-			ge("#userlist").style.width = isExtended ? "80px" : "90px";
-			if (settings.isSwapped) sizes.reverse();
-			split.setSizes(sizes);
-			settings.isExtendedPlayer = isExtended;
-			writeSplitSize();
-			window.dispatchEvent(new Event("resize"));
-			main.scrollChatToEnd();
-		}
-		if (settings.isExtendedPlayer) extendPlayer.onclick();
 
 		final toggleSynch = ge("#togglesynch");
 		toggleSynch.onclick = e -> {
@@ -101,13 +97,11 @@ class Buttons {
 				if (!window.confirm(Lang.get("toggleSynchConfirm"))) return;
 				main.isSyncActive = false;
 				icon.style.color = "rgba(238, 72, 67, 0.75)";
-				icon.classList.add("glyphicon-pause");
-				icon.classList.remove("glyphicon-play");
+				icon.setAttribute("name", "pause");
 			} else {
 				main.isSyncActive = true;
 				icon.style.color = "";
-				icon.classList.add("glyphicon-play");
-				icon.classList.remove("glyphicon-pause");
+				icon.setAttribute("name", "play");
 				main.send({type: UpdatePlaylist});
 			}
 		}
@@ -117,19 +111,21 @@ class Buttons {
 		}
 		final fullscreenBtn = ge("#fullscreenbtn");
 		fullscreenBtn.onclick = e -> {
-			final el = ge("#ytapiplayer");
-			Utils.toggleFullScreen(el);
+			if ((Utils.isTouch() || main.isVerbose()) && !Utils.hasFullscreen()) {
+				Utils.requestFullscreen(document.documentElement);
+			} else {
+				Utils.requestFullscreen(ge("#ytapiplayer"));
+			}
 		}
+		initPageFullscreen();
 		final getPlaylist = ge("#getplaylist");
 		getPlaylist.onclick = e -> {
 			final text = main.getPlaylistLinks().join(",");
 			Utils.copyToClipboard(text);
 			final icon = getPlaylist.firstElementChild;
-			icon.classList.remove("glyphicon-link");
-			icon.classList.add("glyphicon-ok");
+			icon.setAttribute("name", "checkmark");
 			Timer.delay(() -> {
-				icon.classList.add("glyphicon-link");
-				icon.classList.remove("glyphicon-ok");
+			icon.setAttribute("name", "link");
 			}, 2000);
 		}
 		final clearPlaylist = ge("#clearplaylist");
@@ -142,6 +138,7 @@ class Buttons {
 			if (!window.confirm(Lang.get("shufflePlaylistConfirm"))) return;
 			main.send({type: ShufflePlaylist});
 		}
+
 		final lockPlaylist = ge("#lockplaylist");
 		lockPlaylist.onclick = e -> {
 			if (main.isAdmin()) main.send({type: TogglePlaylistLock});
@@ -158,131 +155,73 @@ class Buttons {
 			input.value = main.getTemplateUrl();
 			input.focus();
 		}
+
+		final showOptions = ge("#showoptions");
+		showOptions.onclick = e -> toggleGroup(showOptions);
+
+		final exitBtn = ge("#exitBtn");
+		exitBtn.onclick = e -> {
+			if (main.isUser()) main.send({type: Logout});
+			else ge("#guestname").focus();
+			toggleGroup(showOptions);
+		}
+
+		final swapLayoutBtn = ge("#swapLayoutBtn");
+		swapLayoutBtn.onclick = e -> {
+			swapPlayerAndChat();
+			Settings.write(settings);
+		}
 	}
 
 	static function showPlayerGroup(el:Element):Void {
 		final groups:Array<Element> = cast document.querySelectorAll('[data-target]');
 		for (group in groups) {
 			if (el == group) continue;
-			group.classList.add("collapsed");
-			group.classList.remove("active");
-			ge(group.dataset.target).classList.add("collapse");
+			if (group.classList.contains("collapsed")) continue;
+			toggleGroup(group);
 		}
+		toggleGroup(el);
+	}
+
+	static function toggleGroup(el:Element):Bool {
 		el.classList.toggle("collapsed");
-		el.classList.toggle("active");
 		ge(el.dataset.target).classList.toggle("collapse");
+		return el.classList.toggle("active");
+	}
+
+	static function swapPlayerAndChat():Void {
+		settings.isSwapped = ge("body").classList.toggle("swap");
+		final sizes = document.body.style.gridTemplateColumns.split(" ");
+		sizes.reverse();
+		document.body.style.gridTemplateColumns = sizes.join(" ");
 	}
 
 	static function initSplit():Void {
 		if (split != null) split.destroy();
-		final divs = ["#chatwrap", "#videowrap"];
-		final sizes = [settings.chatSize, settings.playerSize];
-		if (settings.isSwapped) {
-			divs.reverse();
-			sizes.reverse();
-		}
-		split = new Split(divs, {
-			sizes: sizes,
-			onDragEnd: () -> {
-				window.dispatchEvent(new Event("resize"));
-				writeSplitSize();
-			},
-			minSize: 185,
-			snapOffset: 0
+		split = new Split({
+			columnGutters: [{
+				element: ge(".gutter"),
+				track: 1,
+			}],
+			minSize: 200,
+			snapOffset: 0,
+			onDragEnd: saveSplitSize
 		});
-		window.dispatchEvent(new Event("resize"));
 	}
 
-	static function writeSplitSize():Void {
-		final sizes = split.getSizes();
+	static function setSplitSize(chatSize:Float):Void {
+		if (chatSize < CHAT_MIN_SIZE) return;
+		final sizes = document.body.style.gridTemplateColumns.split(" ");
+		final chatId = settings.isSwapped ? 0 : sizes.length - 1;
+		sizes[chatId] = '${chatSize}px';
+		document.body.style.gridTemplateColumns = sizes.join(" ");
+	}
+
+	static function	saveSplitSize():Void {
+		final sizes = document.body.style.gridTemplateColumns.split(" ");
 		if (settings.isSwapped) sizes.reverse();
-		settings.chatSize = sizes[0];
-		settings.playerSize = sizes[1];
+		settings.chatSize = Std.parseFloat(sizes[sizes.length - 1]);
 		Settings.write(settings);
-	}
-
-	static function onVideoResize():Void {
-		final player = ge("#ytapiplayer");
-		final height = player.offsetHeight - ge("#chatline").offsetHeight;
-		ge("#messagebuffer").style.height = '${height}px';
-		ge("#userlist").style.height = '${height}px';
-	}
-
-	static function onClick(el:Element, func:Any->Void):Void {
-		if (!Utils.isTouch()) el.onclick = func;
-		else el.ontouchend = func;
-	}
-
-	static function initNavBar(main:Main):Void {
-		final toggleMenu = ge("#toggleMenu");
-		final onclick = e -> {
-			ge("#nav-collapsible").classList.toggle("in");
-		}
-		onClick(toggleMenu, onclick);
-
-		final classes:Array<Element> = cast document.querySelectorAll(".dropdown-toggle");
-		for (klass in classes) {
-			klass.onclick = e -> {
-				final isActive = klass.classList.toggle("focus");
-				hideMenus();
-				final menu = klass.parentElement.querySelector(".dropdown-menu");
-				if (isActive) menu.style.display = "block";
-				else menu.style.display = "none";
-			}
-			klass.onmouseover = klass.onclick;
-		}
-		final classes:Array<Element> = cast document.querySelectorAll(".dropdown");
-		for (klass in classes) {
-			klass.onmouseleave = e -> {
-				final toggle:Element = cast klass.querySelector(".dropdown-toggle");
-				toggle.classList.remove("focus");
-				toggle.blur();
-				final menu = klass.querySelector(".dropdown-menu");
-				menu.style.display = "";
-			}
-		}
-
-		final exitBtn = ge("#exitBtn");
-		exitBtn.onclick = e -> {
-			if (main.isUser()) main.send({type: Logout});
-			else ge("#guestname").focus();
-			exitBtn.blur();
-			hideMenus();
-		}
-
-		final swapLayoutBtn = ge("#swapLayoutBtn");
-		swapLayoutBtn.onclick = e -> {
-			final p = ge("#main");
-			if (ge("#main").firstElementChild == ge("#chatwrap")) {
-				// do not remove videowrap with insertBefore
-				// because this will recreate iframe-based players
-				p.appendChild(p.removeChild(p.children[1])); // gutter
-				p.appendChild(p.removeChild(p.children[0])); // chat
-				p.appendChild(p.removeChild(p.children[1])); // clear
-			} else {
-				p.insertBefore(p.children[2], p.children[0]);
-				p.insertBefore(p.children[2], p.children[1]);
-			}
-			final p = ge("#controlsrow");
-			p.insertBefore(p.children[1], p.children[0]);
-			final p = ge("#playlistrow");
-			p.insertBefore(p.children[1], p.children[0]);
-			settings.isSwapped = ge("#main").firstElementChild == ge("#videowrap");
-			Settings.write(settings);
-			initSplit();
-			swapLayoutBtn.blur();
-			hideMenus();
-			main.scrollChatToEnd();
-		}
-		if (settings.isSwapped) swapLayoutBtn.onclick();
-		final removeBtn = ge("#removeVideoBtn");
-		removeBtn.onclick = e -> {
-			final has = main.toggleVideoElement();
-			if (has || main.isListEmpty()) removeBtn.innerText = Lang.get("removeVideo");
-			else removeBtn.innerText = Lang.get("addVideo");
-			removeBtn.blur();
-			hideMenus();
-		}
 	}
 
 	public static function initTextButtons(main:Main):Void {
@@ -292,7 +231,6 @@ class Buttons {
 			if (secs > 5) secs = 1;
 			main.setSynchThreshold(secs);
 			updateSynchThresholdBtn();
-			synchThresholdBtn.blur();
 		}
 		updateSynchThresholdBtn();
 
@@ -301,9 +239,15 @@ class Buttons {
 			settings.hotkeysEnabled = !settings.hotkeysEnabled;
 			Settings.write(settings);
 			updateHotkeysBtn();
-			hotkeysBtn.blur();
 		}
 		updateHotkeysBtn();
+
+		final removeBtn = ge("#removeVideoBtn");
+		removeBtn.onclick = e -> {
+			final has = main.toggleVideoElement();
+			if (has || main.isListEmpty()) removeBtn.innerText = Lang.get("removeVideo");
+			else removeBtn.innerText = Lang.get("addVideo");
+		}
 	}
 
 	public static function initHotkeys(main:Main, player:Player):Void {
@@ -329,18 +273,16 @@ class Buttons {
 				case L: ge("#leader_btn").onclick();
 				case P:
 					if (!main.isLeader()) {
-						Timer.delay(() -> player.pause(), 500);
+						JsApi.once(SetLeader, event -> {
+							final name = event.setLeader.clientName;
+							if (name == main.getName()) player.pause();
+						});
 					}
 					ge("#leader_btn").onclick();
 				default: return;
 			}
 			e.preventDefault();
 		}
-	}
-
-	static function hideMenus():Void {
-		final menus:Array<Element> = cast document.querySelectorAll(".dropdown-menu");
-		for (menu in menus) menu.style.display = "";
 	}
 
 	static function updateSynchThresholdBtn():Void {
@@ -358,18 +300,22 @@ class Buttons {
 	static function initChatInput(main:Main):Void {
 		final guestName:InputElement = cast ge("#guestname");
 		guestName.onkeydown = e -> {
-			if (e.keyCode == 13) main.guestLogin(guestName.value);
+			if (e.keyCode == KeyCode.Return) main.guestLogin(guestName.value);
 		}
 
 		final guestPass:InputElement = cast ge("#guestpass");
 		guestPass.onkeydown = e -> {
-			if (e.keyCode == 13) {
+			if (e.keyCode == KeyCode.Return) {
 				main.userLogin(guestName.value, guestPass.value);
 				guestPass.value = "";
 			}
 		}
 
-		new InputWithHistory(cast ge("#chatline"), 50, value -> {
+		final chatline:InputElement = cast ge("#chatline");
+		chatline.onfocus = e -> {
+			if (Utils.isTouch()) main.scrollChatToEnd();
+		}
+		new InputWithHistory(chatline, 50, value -> {
 			main.send({
 				type: Message,
 				message: {
@@ -379,6 +325,15 @@ class Buttons {
 			});
 			return true;
 		});
+	}
+
+	static function initPageFullscreen():Void {
+		document.onfullscreenchange = e -> {
+			final el = document.documentElement;
+			if (Utils.hasFullscreen()) {
+				if (e.target == el) el.classList.add("mobile-view");
+			} else el.classList.remove("mobile-view");
+		}
 	}
 
 }

@@ -1,18 +1,20 @@
 ## SyncTube
 Synchronized video viewing with chat and other features.
-Based on CyTube layout, but with lightweight implementation and very easy way to run locally.
+Lightweight modern implementation and very easy way to run locally.
 
 Default channel example: http://synctube-example.herokuapp.com/
 
 ### New features
+- Reworked layout and theme
 - Multi-Language support
+- Hotkeys (`Alt-P` for global play/pause, [etc](https://github.com/RblSb/SyncTube/blob/80ec4ba1747d22ec136a95d6b35ba6289e15e8ad/src/client/Buttons.hx#L254-L258))
 - Mobile view with page fullscreen
 - Way to play local videos for network users (without NAT loopback feature)
 - Playback rate synchronization (with leader)
 - `/30`, `/-21`, etc to rewind video playback in seconds
 - Links mask: `foo.com/bar${1-4}.mp4` to add multiple items
 - Override every front-end file you want (`user/res` folder)
-- Reworked Modern theme
+- [Native mobile client](https://github.com/RblSb/SyncTubeApp)
 
 ### Supported players
 - Youtube (videos, streams and playlists)
@@ -30,6 +32,7 @@ It's just works, but you can also check [user/ folder](/user/README.md) for serv
 
 ### Plugins
 - [octosubs](https://github.com/RblSb/SyncTube-octosubs) - `ASS`/`SSA` subtitles support
+- [qswitcher](https://github.com/aNNiMON/SyncTube-QSwitcher) - raw video quality switcher
 
 ### How to use
 - Login with any nickname
@@ -45,11 +48,12 @@ It's just works, but you can also check [user/ folder](/user/README.md) for serv
 - Add `APP_URL` config var with `your-app-link.herokuapp.com` value to prevent sleeping when clients online
 
 ### Development
-- Install Haxe 4, VSCode and vshaxe extension
+- Install [Haxe 4.1](https://haxe.org/download/), [VSCode](https://code.visualstudio.com) and [Haxe extension](https://marketplace.visualstudio.com/items?itemName=nadako.vshaxe)
 - `haxelib install all` to install extern libs
+- If you skipped `Setup` section before: `npm install`
 - Open project in VSCode and press `F5` for client+server build and run
 
 ### About
-- [Original idea](https://github.com/calzoneman/sync) and layout by Calvin Montgomery
-- Original theme by Thomas Park
+- Layout and design by [Austin Riddell](https://github.com/aus-tin)
+- [Original idea](https://github.com/calzoneman/sync) by Calvin Montgomery
 - Default emotes by [emlan](https://www.deviantart.com/emlan)

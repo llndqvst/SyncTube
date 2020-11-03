@@ -1,23 +1,39 @@
 package client;
 
+import Types.WsEventType;
+import Types.WsEvent;
 import Types.VideoItem;
 import js.Browser.document;
 import js.Browser.window;
 import js.Syntax;
 
 private typedef VideoChangeFunc = (item:VideoItem)->Void;
+private typedef OnceEventFunc = (event:WsEvent)->Void;
 
 class JsApi {
 
+	static var main:Main;
+	static var player:Player;
 	static final videoChange:Array<VideoChangeFunc> = [];
 	static final videoRemove:Array<VideoChangeFunc> = [];
+	static final onceListeners:Array<{type:WsEventType, func:OnceEventFunc}> = [];
+
+	public static function init(main:Main, player:Player):Void {
+		JsApi.main = main;
+		JsApi.player = player;
+		initPluginsSpace();
+	}
+
+	static function initPluginsSpace():Void {
+		final w:Dynamic = window;
+		if (w.synctube == null) w.synctube = {};
+	}
 
 	@:expose
 	static function addPlugin(id:String, ?onLoaded:()->Void):Void {
-		initPluginsSpace();
 		addScriptToHead('/plugins/$id/index.js', () -> {
 			final obj = {
-				api: JsApi,
+				api: Syntax.plainCode("client.JsApi"),
 				id: id,
 				path: '/plugins/$id'
 			}
@@ -28,11 +44,6 @@ class JsApi {
 				if (onLoaded != null) onLoaded();
 			}
 		});
-	}
-
-	static function initPluginsSpace():Void {
-		final w:Dynamic = window;
-		if (w.synctube == null) w.synctube = {};
 	}
 
 	@:expose
@@ -50,6 +61,49 @@ class JsApi {
 			if ((child : Dynamic).src == url) return true;
 		}
 		return false;
+	}
+
+	@:expose
+	static function getTime():Float {
+		return player.getTime();
+	}
+
+	@:expose
+	static function setTime(time:Float):Void {
+		player.setTime(time);
+	}
+
+	@:expose
+	static function isLeader():Bool {
+		return main.isLeader();
+	}
+
+	@:expose
+	static function forceSyncNextTick(flag:Bool):Void {
+		main.forceSyncNextTick = flag;
+	}
+
+	@:expose
+	static function setVideoSrc(src:String):Void {
+		player.changeVideoSrc(src);
+	}
+
+	@:expose
+	public static function once(type:WsEventType, func:OnceEventFunc):Void {
+		onceListeners.push({type: type, func: func});
+	}
+
+	public static function fireOnceEvent(event:WsEvent):Void {
+		var i = 0;
+		while (i < onceListeners.length) {
+			final listener = onceListeners[i];
+			if (listener.type == event.type) {
+				listener.func(event);
+				onceListeners.remove(listener);
+				continue;
+			}
+			i++;
+		}
 	}
 
 	@:expose

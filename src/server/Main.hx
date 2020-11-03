@@ -28,6 +28,7 @@ class Main {
 	static inline var VIDEO_START_MAX_DELAY = 3000;
 	static inline var VIDEO_SKIP_DELAY = 1000;
 	final rootDir = '$__dirname/..';
+	public final logsDir:String;
 	final verbose:Bool;
 	final statePath:String;
 	final wss:WSServer;
@@ -43,6 +44,7 @@ class Main {
 	final videoList = new VideoList();
 	final videoTimer = new VideoTimer();
 	final messages:Array<Message> = [];
+	final logger:Logger;
 	var isPlaylistOpen = true;
 	var itemPos = 0;
 
@@ -51,6 +53,7 @@ class Main {
 	function new() {
 		verbose = Sys.args().has("--verbose");
 		statePath = '$rootDir/user/state.json';
+		logsDir = '$rootDir/user/logs';
 		// process.on("exit", exit);
 		process.on("SIGINT", exit); // ctrl+c
 		process.on("SIGUSR1", exit); // kill pid
@@ -67,12 +70,14 @@ class Main {
 			logError("unhandledRejection", reason);
 			exit();
 		});
+		logger = new Logger(logsDir, 10, verbose);
 		consoleInput = new ConsoleInput(this);
 		consoleInput.initConsoleInput();
 		initIntergationHandlers();
 		loadState();
 		config = loadUserConfig();
 		userList = loadUsers();
+		config.isVerbose = verbose;
 		config.salt = generateConfigSalt();
 		localIp = Utils.getLocalIp();
 		globalIp = localIp;
@@ -80,9 +85,9 @@ class Main {
 		final envPort = (process.env : Dynamic).PORT;
 		if (envPort != null) port = envPort;
 
+		trace('Local: http://$localIp:$port');
 		Utils.getGlobalIp(ip -> {
 			globalIp = ip;
-			trace('Local: http://$localIp:$port');
 			trace('Global: http://$globalIp:$port');
 		});
 
@@ -93,18 +98,26 @@ class Main {
 		final server = Http.createServer((req, res) -> {
 			HttpServer.serveFiles(req, res);
 		});
-		server.listen(port);
 		wss = new WSServer({server: server});
 		wss.on("connection", onConnect);
+		server.listen(port);
+
+		new Timer(25000).run = () -> {
+			for (client in clients) {
+				if (client.isAlive) {
+					client.isAlive = false;
+					client.ws.ping();
+					continue;
+				}
+				client.ws.terminate();
+			}
+		};
 	}
 
 	public function exit():Void {
 		saveState();
-		if (wss == null) {
-			process.exit();
-			return;
-		}
-		wss.close(() -> process.exit());
+		logger.saveLog();
+		process.exit();
 	}
 
 	function generateConfigSalt():String {
@@ -161,9 +174,7 @@ class Main {
 
 	function writeUsers(users:UserList):Void {
 		final folder = '$rootDir/user';
-		if (!FileSystem.exists(folder)) {
-			FileSystem.createDirectory(folder);
-		}
+		Utils.ensureDir(folder);
 		final data = Json.stringify(users, "\t");
 		File.saveContent('$folder/users.json', data);
 	}
@@ -202,7 +213,7 @@ class Main {
 	function logError(type:String, data:Dynamic):Void {
 		trace(type, data);
 		final crashesFolder = '$rootDir/user/crashes';
-		if (!FileSystem.exists(crashesFolder)) FileSystem.createDirectory(crashesFolder);
+		Utils.ensureDir(crashesFolder);
 		final name = DateTools.format(Date.now(), "%Y-%m-%d_%H_%M_%S") + "-" + type;
 		File.saveContent('$crashesFolder/$name.json', Json.stringify(data, "\t"));
 	}
@@ -233,6 +244,37 @@ class Main {
 		trace('Admin $name added.');
 	}
 
+	public function replayLog(events:Array<ServerEvent>):Void {
+		final timer = new Timer(1000);
+		timer.run = () -> {
+			if (events.length == 0) {
+				timer.stop();
+				return;
+			}
+			final e = events.shift();
+			switch (e.event.type) {
+				case Connected:
+					if (clients.getByName(e.clientName) == null) {
+						final ws:Dynamic = {send: () -> {}};
+						final id = freeIds.length > 0 ? freeIds.shift() : clients.length;
+						final client = new Client(ws, null, id, e.clientName, e.clientGroup);
+						ws.ping = () -> client.isAlive = true;
+						clients.push(client);
+					}
+					onMessage(clients.getByName(e.clientName), e.event, true);
+				case Login:
+					final name = e.event.login.clientName;
+					final hash = e.event.login.passHash;
+					if (hash != null && !userList.admins.exists(a -> a.name == name)) {
+						e.event.login.passHash = null;
+					}
+					onMessage(clients.getByName(e.clientName), e.event, true);
+				default:
+					onMessage(clients.getByName(e.clientName), e.event, true);
+			}
+		}
+	}
+
 	function onConnect(ws:WebSocket, req:IncomingMessage):Void {
 		final ip = req.connection.remoteAddress;
 		final id = freeIds.length > 0 ? freeIds.shift() : clients.length;
@@ -242,30 +284,14 @@ class Main {
 		final client = new Client(ws, req, id, name, 0);
 		client.isAdmin = isAdmin;
 		clients.push(client);
-		if (clients.length == 1 && videoList.length > 0)
-			if (videoTimer.isPaused()) videoTimer.play();
-
-		send(client, {
-			type: Connected,
-			connected: {
-				config: config,
-				history: messages,
-				isUnknownClient: true,
-				clientName: client.name,
-				clients: [
-					for (client in clients) client.getData()
-				],
-				videoList: videoList,
-				isPlaylistOpen: isPlaylistOpen,
-				itemPos: itemPos,
-				globalIp: globalIp
-			}
-		});
-		sendClientList();
+		ws.on("pong", () -> client.isAlive = true);
+		onMessage(client, {
+			type: Connected
+		}, true);
 
 		ws.on("message", data -> {
 			final obj = wsEventParser.fromJson(data);
-			if (wsEventParser.errors.length > 0) {
+			if (wsEventParser.errors.length > 0 || noTypeObj(obj)) {
 				final line = 'Wrong request for type "${obj.type}":';
 				final errorLines = ErrorUtils.convertErrorArray(wsEventParser.errors);
 				final errors = '$line\n$errorLines';
@@ -273,26 +299,77 @@ class Main {
 				serverMessage(client, errors);
 				return;
 			}
-			onMessage(client, obj);
+			onMessage(client, obj, false);
 		});
+
 		ws.on("close", err -> {
-			trace('Client ${client.name} disconnected');
-			Utils.sortedPush(freeIds, client.id);
-			clients.remove(client);
-			sendClientList();
-			if (client.isLeader) {
-				if (videoTimer.isPaused()) videoTimer.play();
-			}
-			if (clients.length == 0) {
-				if (waitVideoStart != null) waitVideoStart.stop();
-				videoTimer.pause();
-			}
+			onMessage(client, {
+				type: Disconnected
+			}, true);
 		});
 	}
 
-	function onMessage(client:Client, data:WsEvent):Void {
+	function noTypeObj(data:WsEvent):Bool {
+		if (data.type == GetTime) return false;
+		if (data.type == TogglePlaylistLock) return false;
+		if (data.type == UpdatePlaylist) return false;
+		if (data.type == Logout) return false;
+		final t:String = cast data.type;
+		final t = t.charAt(0).toLowerCase() + t.substr(1);
+		return js.Syntax.strictEq(Reflect.field(data, t), null);
+	}
+
+	function onMessage(client:Client, data:WsEvent, internal:Bool):Void {
+		logger.log({
+			clientName: client.name,
+			clientGroup: client.group.toInt(),
+			event: data,
+			time: Date.now().getTime()
+		});
 		switch (data.type) {
 			case Connected:
+				if (!internal) return;
+				if (clients.length == 1 && videoList.length > 0)
+					if (videoTimer.isPaused()) videoTimer.play();
+
+				send(client, {
+					type: Connected,
+					connected: {
+						config: config,
+						history: messages,
+						isUnknownClient: true,
+						clientName: client.name,
+						clients: clientList(),
+						videoList: videoList,
+						isPlaylistOpen: isPlaylistOpen,
+						itemPos: itemPos,
+						globalIp: globalIp
+					}
+				});
+				sendClientListExcept(client);
+
+			case Disconnected:
+				if (!internal) return;
+				trace('Client ${client.name} disconnected');
+				Utils.sortedPush(freeIds, client.id);
+				clients.remove(client);
+				sendClientList();
+				if (client.isLeader) {
+					if (videoTimer.isPaused()) videoTimer.play();
+				}
+				if (clients.length == 0) {
+					if (waitVideoStart != null) waitVideoStart.stop();
+					videoTimer.pause();
+				}
+				Timer.delay(() -> {
+					if (clients.exists(i -> i.name == client.name)) return;
+					broadcast({
+						type: ServerMessage, serverMessage: {
+							textId: '${client.name} has left'
+						}
+					});
+				}, 5000);
+
 			case UpdateClients:
 				sendClientList();
 			case Login:
@@ -329,7 +406,7 @@ class Main {
 						clients: clientList()
 					}
 				});
-				sendClientList();
+				sendClientListExcept(client);
 
 			case PasswordRequest:
 			case LoginError:
@@ -346,7 +423,7 @@ class Main {
 						clients: clientList()
 					}
 				});
-				sendClientList();
+				sendClientListExcept(client);
 
 			case Message:
 				if (!checkPermission(client, WriteChatPerm)) return;
@@ -357,7 +434,7 @@ class Main {
 				}
 				data.message.text = text;
 				data.message.clientName = client.name;
-				final time = "[" + Date.now().toString().split(" ")[1] + "] ";
+				final time = Date.now().toString().split(" ")[1];
 				messages.push({text: text, name: client.name, time: time});
 				if (messages.length > config.serverChatHistory) messages.shift();
 				broadcast(data);
@@ -415,12 +492,7 @@ class Main {
 
 			case SkipVideo:
 				if (!checkPermission(client, RemoveVideoPerm)) return;
-				if (videoList.length == 0) return;
-				final item = videoList[itemPos];
-				if (item.url != data.skipVideo.url) return;
-				itemPos = videoList.skipItem(itemPos);
-				if (videoList.length > 0) restartWaitTimer();
-				broadcast(data);
+				skipVideo(data);
 
 			case Pause:
 				if (videoList.length == 0) return;
@@ -443,9 +515,11 @@ class Main {
 					videoTimer.pause();
 					videoTimer.setTime(maxTime);
 					final currentLength = videoList.length;
+					final currentPos = itemPos;
 					Timer.delay(() -> {
 						if (videoList.length != currentLength) return;
-						onMessage(client, {
+						if (itemPos != currentPos) return;
+						skipVideo({
 							type: SkipVideo, skipVideo: {
 								url: videoList[itemPos].url
 							}
@@ -586,6 +660,15 @@ class Main {
 		});
 	}
 
+	function sendClientListExcept(skipped:Client):Void {
+		broadcastExcept(skipped, {
+			type: UpdateClients,
+			updateClients: {
+				clients: clientList()
+			}
+		});
+	}
+
 	function serverMessage(client:Client, textId:String):Void {
 		send(client, {
 			type: ServerMessage, serverMessage: {
@@ -609,6 +692,15 @@ class Main {
 			if (client == skipped) continue;
 			client.ws.send(json, null);
 		}
+	}
+
+	function skipVideo(data:WsEvent):Void {
+		if (videoList.length == 0) return;
+		final item = videoList[itemPos];
+		if (item.url != data.skipVideo.url) return;
+		itemPos = videoList.skipItem(itemPos);
+		if (videoList.length > 0) restartWaitTimer();
+		broadcast(data);
 	}
 
 	function checkPermission(client:Client, perm:Permission):Bool {

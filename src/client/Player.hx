@@ -5,6 +5,7 @@ import client.Main.ge;
 import client.players.Raw;
 import client.players.Youtube;
 import client.players.Iframe;
+import Types.VideoDataRequest;
 import Types.VideoData;
 import Types.VideoItem;
 using StringTools;
@@ -97,14 +98,14 @@ class Player {
 		player = newPlayer;
 	}
 
-	public function getVideoData(url:String, callback:(data:VideoData)->Void):Void {
-		var player = players.find(player -> player.isSupportedLink(url));
+	public function getVideoData(data:VideoDataRequest, callback:(data:VideoData)->Void):Void {
+		var player = players.find(player -> player.isSupportedLink(data.url));
 		if (player == null) player = rawPlayer;
-		player.getVideoData(url, callback);
+		player.getVideoData(data, callback);
 	}
 
-	public function getIframeData(iframe:String, callback:(data:VideoData)->Void):Void {
-		iframePlayer.getVideoData(iframe, callback);
+	public function getIframeData(data:VideoDataRequest, callback:(data:VideoData)->Void):Void {
+		iframePlayer.getVideoData(data, callback);
 	}
 
 	public function setVideo(i:Int):Void {
@@ -128,10 +129,33 @@ class Player {
 		ge("#currenttitle").textContent = item.title;
 	}
 
+	public function changeVideoSrc(src:String):Void {
+		if (player == null) return;
+		final item = items[itemPos];
+		if (item == null) return;
+		player.loadVideo({
+			url: src,
+			title: item.title,
+			author: item.author,
+			duration: item.duration,
+			isTemp: item.isTemp,
+			isIframe: item.isIframe
+		});
+	}
+
 	public function removeVideo():Void {
 		JsApi.fireVideoRemoveEvents(items[itemPos]);
 		player.removeVideo();
 		ge("#currenttitle").textContent = Lang.get("nothingPlaying");
+		setPauseIndicator(true);
+	}
+
+	public function setPauseIndicator(flag:Bool):Void {
+		if (!main.isSyncActive) return;
+		final state = flag ? "play" : "pause";
+		final el = ge("#pause-indicator");
+		if (el.getAttribute("name") == state) return;
+		el.setAttribute("name", state);
 	}
 
 	public function onCanBePlayed():Void {
@@ -185,25 +209,19 @@ class Player {
 
 	public function addVideoItem(item:VideoItem, atEnd:Bool):Void {
 		final url = item.url.htmlEscape(true);
+		final duration = item.isIframe ? "" : duration(item.duration);
 		final itemEl = Utils.nodeFromString(
-			'<li class="queue_entry pluid-0" title="${Lang.get("addedBy")}: ${item.author}">
-				<a class="qe_title" href="$url" target="_blank">${item.title.htmlEscape()}</a>
-				<span class="qe_time">${duration(item.duration)}</span>
-				<div class="qe_clear"></div>
-				<div class="btn-group">
-					<button class="btn btn-xs btn-default qbtn-play">
-						<span class="glyphicon glyphicon-play"></span>${Lang.get("play")}
-					</button>
-					<button class="btn btn-xs btn-default qbtn-next">
-						<span class="glyphicon glyphicon-share-alt"></span>${Lang.get("setNext")}
-					</button>
-					<button class="btn btn-xs btn-default qbtn-tmp">
-						<span class="glyphicon glyphicon-flag"></span>
-					</button>
-					<button class="btn btn-xs btn-default qbtn-delete">
-						<span class="glyphicon glyphicon-trash"></span>${Lang.get("delete")}
-					</button>
-				</div>
+			'<li class="queue_entry info" title="${Lang.get("addedBy")}: ${item.author}">
+				<header>
+					<span class="qe_time">$duration</span>
+					<h4><a class="qe_title" href="$url" target="_blank">${item.title.htmlEscape()}</a></h4>
+				</header>
+				<span class="controls">
+					<button class="qbtn-play" title="${Lang.get("play")}"><ion-icon name="play"></ion-icon></button>
+					<button class="qbtn-next" title="${Lang.get("setNext")}"><ion-icon name="arrow-up"></ion-icon></button>
+					<button class="qbtn-tmp"><ion-icon></ion-icon></button>
+					<button class="qbtn-delete" title="${Lang.get("delete")}"><ion-icon name="close"></ion-icon></button>
+				</span>
 			</li>'
 		);
 		items.addItem(item, atEnd, itemPos);
@@ -214,8 +232,10 @@ class Player {
 	}
 
 	function setItemElementType(item:Element, isTemp:Bool):Void {
-		final text = isTemp ? Lang.get("makePermanent") : Lang.get("makeTemporary");
-		item.querySelector(".qbtn-tmp").innerHTML = '<span class="glyphicon glyphicon-flag"></span>$text';
+		final btn = item.querySelector(".qbtn-tmp");
+		btn.title = isTemp ? Lang.get("makePermanent") : Lang.get("makeTemporary");
+		final iconType = isTemp ? "lock-open" : "lock-closed";
+		btn.firstElementChild.setAttribute("name", iconType);
 		if (isTemp) item.classList.add("queue_temp");
 		else item.classList.remove("queue_temp");
 	}
@@ -304,7 +324,10 @@ class Player {
 
 	function totalDuration():String {
 		var time = 0.0;
-		for (item in items) time += item.duration;
+		for (item in items) {
+			if (item.isIframe) continue;
+			time += item.duration;
+		}
 		return duration(time);
 	}
 
